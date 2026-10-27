@@ -174,6 +174,8 @@ function semanticsFor(
         provider.windows,
         "MiMo exposes local API authentication, but no first-party read-only quota endpoint is established, so model headroom remains unknown.",
       );
+    case "factory":
+      return factorySemantics(provider.windows, generatedAt);
     case "deepseek":
     case "openrouter":
       return unknownSemantics(
@@ -1021,6 +1023,51 @@ function agySemantics(
   return knownSemantics(
     effectiveAvailability,
     "Antigravity groups Gemini windows separately from Claude/GPT windows. Within a group, the weekly and 5-hour windows jointly bound that group, so that group's effective remaining percentage is the minimum across the named windows.",
+  );
+}
+
+/**
+ * Factory's billing-limits endpoint reports each model tier's own rolling
+ * 5-hour, weekly, and monthly token-rate windows. Within a tier those windows
+ * jointly bound that tier, so the tier's effective remaining percentage is
+ * the minimum across its named windows. Unfamiliar windows are not folded
+ * into either tier's bound, so they stay unresolved.
+ */
+function factorySemantics(
+  windows: QuotaWindow[],
+  generatedAt: string,
+): QuotaSemantics {
+  const standard = windows.filter(
+    ({ id }) =>
+      id === "standard_5h" ||
+      id === "standard_weekly" ||
+      id === "standard_monthly",
+  );
+  const core = windows.filter(
+    ({ id }) =>
+      id === "core_5h" || id === "core_weekly" || id === "core_monthly",
+  );
+  const resolved = new Set([...standard, ...core]);
+  const unresolved = windows.filter((window) => !resolved.has(window));
+  const effectiveAvailability: EffectiveAvailability[] = [];
+  if (standard.length > 0) {
+    effectiveAvailability.push(availability("standard", standard, generatedAt));
+  }
+  if (core.length > 0) {
+    effectiveAvailability.push(availability("core", core, generatedAt));
+  }
+  if (unresolved.length > 0) {
+    return {
+      status: effectiveAvailability.length > 0 ? "partial" : "unknown",
+      description:
+        "Factory groups standard-tier model windows separately from core-tier model windows. Within a tier, the monthly, weekly, and 5-hour windows jointly bound that tier. Unfamiliar windows are not folded into either bound, so they stay unresolved.",
+      effectiveAvailability,
+      unresolvedWindowIds: unresolved.map(({ id }) => id),
+    };
+  }
+  return knownSemantics(
+    effectiveAvailability,
+    "Factory groups standard-tier model windows separately from core-tier model windows. Within a tier, the monthly, weekly, and 5-hour windows jointly bound that tier, so that tier's effective remaining percentage is the minimum across the named windows.",
   );
 }
 
